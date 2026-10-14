@@ -303,11 +303,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       try? FileManager.default.removeItem(at: support)
       try? FileManager.default.copyItem(at: bundled, to: support)
     }
-    NSWorkspace.shared.activateFileViewerSelecting([support])
+    // The folder is inside the hidden Library folder, so hand over the path for Cmd+Shift+G.
+    NSPasteboard.general.clearContents()
+    NSPasteboard.general.setString(support.path, forType: .string)
+    if let chrome = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.google.Chrome"),
+      let url = URL(string: "chrome://extensions")
+    {
+      NSWorkspace.shared.open([url], withApplicationAt: chrome, configuration: NSWorkspace.OpenConfiguration())
+    }
     alert("Browser gamepad for Xbox Cloud Gaming",
       """
-      1. In Chrome, open chrome://extensions and turn on Developer mode (top right).
-      2. Click "Load unpacked" and choose the "Chrome Extension" folder that just opened in Finder.
+      1. In Chrome's Extensions page (just opened), turn on Developer mode (top right).
+      2. Click "Load unpacked". In the folder picker press Cmd+Shift+G, paste (Cmd+V), press Return, then click Select.
+         (The folder's location is already on your clipboard.)
       3. Open xbox.com/play. Your controller appears as an Xbox controller, with rumble.
 
       Keyboard/mouse mapping pauses automatically while that tab is in front.
