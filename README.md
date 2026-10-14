@@ -4,9 +4,18 @@ A macOS menu-bar app that makes the **Turtle Beach Xbox Rematch Advanced Wired C
 
 macOS 26 has a built-in driver for wired Xbox controllers, but it only accepts Microsoft's own controllers. Third-party pads like the Rematch (USB `10f5:711f`) show up on USB and nothing uses them. RematchBridge talks to the controller directly over USB (IOUSBHost, no driver or kernel extension) and sends keyboard and mouse events.
 
+## Xbox Cloud Gaming / GeForce NOW (browser gamepad)
+
+Browsers read controllers through the web Gamepad API, so a Chrome extension can supply one without Apple's entitlement. RematchBridge streams the controller's state over a loopback-only WebSocket (`127.0.0.1:37121`). It accepts only pages from xbox.com, play.geforcenow.com and hardwaretester.com; any other origin gets `403` and no data. The extension in `Extension/` presents the controller to those pages as a standard Xbox gamepad with analog sticks and triggers, the Xbox and Share buttons, and rumble. Keyboard/mouse mapping pauses automatically while one of those tabs is in front.
+
+Setup (Chrome):
+1. Open `chrome://extensions` and turn on **Developer mode**.
+2. Click **Load unpacked** and choose this repo's `Extension` folder. The menu item **Set Up Browser Gamepad…** also copies a version to your Library folder and puts the path on the clipboard (press Cmd+Shift+G in the picker).
+3. Reload any xbox.com or GeForce NOW tab that was already open. Test at https://hardwaretester.com/gamepad.
+
 ## Why keyboard/mouse and not a virtual controller?
 
-To create a virtual game controller, macOS needs the `com.apple.developer.hid.virtual.device` entitlement, which only Apple can grant. Even running as root doesn't get around it (tested on macOS 26.5). So games will not see a controller. Anything that accepts keyboard and mouse works, including emulators and Moonlight, Parsec and GeForce NOW. Games that only accept a controller, such as Xbox Cloud Gaming in a browser, won't work.
+To create a virtual game controller, macOS needs the `com.apple.developer.hid.virtual.device` entitlement, which only Apple can grant. Even running as root doesn't get around it (tested on macOS 26.5). So native Mac games won't see a controller. Anything that accepts keyboard and mouse works, including emulators, Moonlight and Parsec. Browser games, such as Xbox Cloud Gaming, get a real gamepad through the extension above.
 
 ## Features
 
