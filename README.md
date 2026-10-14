@@ -19,6 +19,9 @@ To create a virtual game controller, macOS needs the `com.apple.developer.hid.vi
 
 ## Features
 
+- **RematchBridge window:** setup checklist (controller, keyboard & mouse permission, browser gamepad), a live controller view that doubles as a tester, profile picker, mapping switch and Open at Login. It opens on first launch, from the menu, or when you open the app again.
+- **On-screen HUD:** a brief banner when the controller connects or disconnects, mapping pauses or resumes, or the profile changes.
+
 - Detects the controller on plug-in and unplug. A USB reset on connect wakes the pad fully (the Xbox button lights up).
 - Profiles: **Desktop** (mouse, scroll, clicks, arrows), **Emulator** (RetroArch default keys), **Streaming (FPS)** (WASD, mouse look).
 - Per-app profiles: "Always Use for…" in the menu, or `"apps": [bundle IDs]` in the profile file.
@@ -66,6 +69,7 @@ The back paddles send whatever you assign in Turtle Beach Control Hub (A and B b
 ## Diagnostics
 
 - `build/gipdump 60` prints live button and stick state for 60 seconds. Quit RematchBridge first, since only one program can read the controller at a time.
+- `build/make-icon <dir>` regenerates the app and extension icons (run by `build.sh`).
 - `./test.sh` runs the unit tests (key parsing, profiles, and decoding of packets captured from the Rematch).
 - The log is at `~/Library/Logs/RematchBridge.log` (menu: Open Log).
 

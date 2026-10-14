@@ -8,12 +8,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   private let usbQueue = DispatchQueue(label: "rematchbridge.usb")
   private let monitor = GIPMonitor()
   private let web = WebBridge()
+  private let model = AppModel()
+  private let hud = HUD()
+  private lazy var window = MainWindowController(model: model)
   private var rumbleGeneration = 0
   private var controllers: [UInt32: GIPDevice] = [:]  // by USB location
   private var statusItem: NSStatusItem!
   private var trusted = AXIsProcessTrusted()
   private var trustTimer: Timer?
-  /// The last app in front other than us, for "Use profile for…".
+  /// The last app in front other than us, for "Always Use for…".
   private var lastApp: NSRunningApplication?
   /// The profile the user picked; app-specific profiles override it while their app is in front.
   private var chosenProfileName: String {
@@ -31,25 +34,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     mapper = Mapper(profile: store.profiles[0])
     mapper.onEnabledChange = { [weak self] on in
       Log.write("mapping \(on ? "enabled" : "paused")")
-      self?.refreshIcon()
+      self?.hud.show(on ? "Mapping On" : "Mapping Paused", symbol: on ? "play.circle.fill" : "pause.circle.fill")
+      self?.refresh()
     }
-    applyProfile()
+    applyProfile(announce: false)
 
     statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
     let menu = NSMenu()
     menu.delegate = self
     statusItem.menu = menu
-    refreshIcon()
+
+    wireModel()
 
     NSWorkspace.shared.notificationCenter.addObserver(
       self, selector: #selector(frontAppChanged(_:)), name: NSWorkspace.didActivateApplicationNotification, object: nil)
     if let front = NSWorkspace.shared.frontmostApplication, front != .current { lastApp = front }
 
     web.onFocusChange = { [weak self] focused in
-      guard let self else { return }
-      if focused != self.mapper.suppressed { Log.write(focused ? "browser gamepad active" : "browser gamepad idle") }
+      guard let self, focused != self.mapper.suppressed else { return }
+      Log.write(focused ? "browser gamepad active" : "browser gamepad idle")
       self.mapper.setSuppressed(focused)
-      self.refreshIcon()
+      self.refresh()
+    }
+    web.onPagesChange = { [weak self] pages in
+      self?.model.browserPages = pages
     }
     web.onRumble = { [weak self] strong, weak, duration in self?.rumble(strong: strong, weak: weak, duration: duration) }
     web.start()
@@ -57,16 +65,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     monitor.onConnect = { [weak self] service in self?.connect(service) }
     monitor.start(queue: usbQueue)
 
-    if !trusted { requestAccessibility(prompt: true) }
     if UserDefaults.standard.object(forKey: "didOfferLogin") == nil {
       UserDefaults.standard.set(true, forKey: "didOfferLogin")
       setLaunchAtLogin(true)
     }
+    if !trusted { requestAccessibility(prompt: false) }
+    refresh()
+    // First run, or something still needs attention: show the setup window.
+    if !UserDefaults.standard.bool(forKey: "didOnboard") || !trusted {
+      UserDefaults.standard.set(true, forKey: "didOnboard")
+      window.show()
+    }
+  }
+
+  func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+    window.show()  // opening the app again from Finder/Spotlight shows the window
+    return false
   }
 
   func applicationWillTerminate(_ notification: Notification) {
     mapper.stop()
     for c in controllers.values { c.close() }
+  }
+
+  private func wireModel() {
+    model.setMappingEnabled = { [weak self] on in self?.mapper.setEnabled(on) }
+    model.chooseProfile = { [weak self] name in self?.choose(profileNamed: name) }
+    model.openAccessibility = { [weak self] in self?.requestAccessibility(prompt: true) }
+    model.setUpBrowser = { [weak self] in self?.showExtension() }
+    model.setLaunchAtLogin = { [weak self] on in self?.setLaunchAtLogin(on); self?.refresh() }
+    model.editProfiles = { [weak self] in self?.editProfiles() }
   }
 
   // MARK: - Controllers
@@ -77,7 +105,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let location = device.locationID
     device.onState = { [weak self] state in
       self?.web.publish(state)
-      DispatchQueue.main.async { self?.mapper.update(state) }
+      DispatchQueue.main.async {
+        self?.mapper.update(state)
+        self?.model.updatePad(state)
+      }
     }
     device.onDisconnect = { [weak self] in
       DispatchQueue.main.async {
@@ -87,8 +118,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if self.controllers.isEmpty {
           self.mapper.stop()
           self.web.publish(nil)
+          self.model.pad = PadState()
         }
-        self.refreshIcon()
+        self.hud.show("Controller Disconnected", symbol: "gamecontroller")
+        self.refresh()
       }
     }
     device.start { [weak self] error in
@@ -103,7 +136,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         Log.write("connected: \(device.name) \(String(format: "%04x:%04x", device.vendorID, device.productID))")
         self.mapper.start()
         self.web.publish(PadState())
-        self.refreshIcon()
+        self.hud.show("Controller Connected", symbol: "gamecontroller.fill")
+        self.refresh()
       }
     }
   }
@@ -126,7 +160,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   @objc private func frontAppChanged(_ note: Notification) {
     guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
     if app != .current { lastApp = app }
-    applyProfile()
+    applyProfile(announce: true)
   }
 
   private var activeProfile: Profile {
@@ -138,11 +172,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     return store.profiles.first { $0.name == chosenProfileName } ?? store.profiles[0]
   }
 
-  private func applyProfile() {
+  private func applyProfile(announce: Bool) {
     let p = activeProfile
     guard p.name != mapper.profile.name || p.url != mapper.profile.url else { return }
     mapper.setProfile(p)
     Log.write("profile: \(p.name)")
+    if announce, !controllers.isEmpty, !mapper.suppressed {
+      hud.show(p.name, symbol: "slider.horizontal.3")
+    }
+    refresh()
+  }
+
+  private func choose(profileNamed name: String) {
+    chosenProfileName = name
+    if let p = store.profiles.first(where: { $0.name == name }) {
+      mapper.setProfile(activeProfile)
+      Log.write("profile: \(p.name) (chosen)")
+    }
+    refresh()
   }
 
   // MARK: - Menu
@@ -150,34 +197,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   func menuNeedsUpdate(_ menu: NSMenu) {
     menu.removeAllItems()
 
-    if controllers.isEmpty {
-      menu.addItem(disabled("No controller — plug in your Rematch"))
-    } else {
-      for c in controllers.values { menu.addItem(disabled("● \(c.name)")) }
+    // Status
+    let name = controllers.values.first.map { AppModel.shortName($0.name) }
+    let header = disabled(name ?? "No Controller", symbol: name == nil ? "gamecontroller" : "gamecontroller.fill")
+    if #available(macOS 14.4, *) {
+      header.subtitle = name == nil ? "Plug in your Rematch with a USB cable" : statusText
     }
+    menu.addItem(header)
     if !trusted {
-      menu.addItem(.separator())
-      menu.addItem(item("⚠︎ Allow Accessibility so buttons work…", #selector(openAccessibility)))
+      menu.addItem(item("Allow Keyboard & Mouse Control…", #selector(openAccessibility), symbol: "exclamationmark.triangle.fill"))
     }
+    menu.addItem(item("Open RematchBridge…", #selector(openWindow), key: ",", symbol: "macwindow"))
 
-    if mapper.suppressed {
-      menu.addItem(disabled("● Browser gamepad in use (keys paused)"))
-    }
-
+    // Mapping
     menu.addItem(.separator())
-    let toggle = item(mapper.enabled ? "Mapping On" : "Mapping Paused", #selector(toggleMapping), key: "")
-    toggle.state = mapper.enabled ? .on : .off
+    let toggle = item(mapper.enabled ? "Pause Mapping" : "Resume Mapping", #selector(toggleMapping),
+                      symbol: mapper.enabled ? "pause.circle" : "play.circle")
+    if #available(macOS 14.4, *) { toggle.subtitle = "Or press the Xbox button" }
     menu.addItem(toggle)
-    menu.addItem(disabled("Press the Xbox button to pause/resume"))
 
+    // Profiles
     menu.addItem(.separator())
-    let active = mapper.profile
-    menu.addItem(disabled("Profile"))
+    menu.addItem(NSMenuItem.sectionHeader(title: "Profile"))
     for p in store.profiles {
-      let i = item(p.name + (p.apps.isEmpty ? "" : "  (\(appNames(p.apps)))"), #selector(chooseProfile(_:)))
+      let i = item(p.name, #selector(chooseProfile(_:)))
       i.representedObject = p.name
-      i.state = p.name == active.name ? .on : .off
-      i.indentationLevel = 1
+      i.state = p.name == mapper.profile.name ? .on : .off
+      if #available(macOS 14.4, *), !p.apps.isEmpty { i.subtitle = "Auto: " + appNames(p.apps) }
       menu.addItem(i)
     }
     if let app = lastApp, let id = app.bundleIdentifier {
@@ -189,34 +235,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         sub.addItem(i)
       }
       let assign = NSMenuItem(title: "Always Use for “\(app.localizedName ?? id)”", action: nil, keyEquivalent: "")
+      assign.image = NSImage(systemSymbolName: "pin", accessibilityDescription: nil)
       assign.submenu = sub
       menu.addItem(assign)
     }
     if !store.errors.isEmpty {
-      menu.addItem(item("⚠︎ \(store.errors.count) profile error(s) — Show", #selector(showProfileErrors)))
+      menu.addItem(item("\(store.errors.count) Profile Error(s)…", #selector(showProfileErrors), symbol: "exclamationmark.triangle"))
     }
-    menu.addItem(item("Edit Profiles…", #selector(editProfiles)))
-    menu.addItem(item("Reload Profiles", #selector(reloadProfiles)))
+    menu.addItem(item("Edit Profiles…", #selector(editProfilesAction), symbol: "square.and.pencil"))
+    menu.addItem(item("Reload Profiles", #selector(reloadProfiles), symbol: "arrow.clockwise"))
 
-    menu.addItem(item("Set Up Browser Gamepad (Xbox Cloud)…", #selector(showExtension)))
-
+    // Browser
     menu.addItem(.separator())
-    let login = item("Launch at Login", #selector(toggleLogin))
+    if model.browserPages.isEmpty {
+      menu.addItem(item("Set Up Browser Gamepad…", #selector(showExtensionAction), symbol: "globe"))
+    } else {
+      let b = disabled("Browser Gamepad: " + model.browserPages.joined(separator: ", "), symbol: "globe")
+      menu.addItem(b)
+    }
+
+    // App
+    menu.addItem(.separator())
+    let login = item("Open at Login", #selector(toggleLogin))
     login.state = SMAppService.mainApp.status == .enabled ? .on : .off
     menu.addItem(login)
     menu.addItem(item("Open Log", #selector(openLog)))
     menu.addItem(item("Quit RematchBridge", #selector(quit), key: "q"))
   }
 
-  private func item(_ title: String, _ action: Selector, key: String = "") -> NSMenuItem {
+  private var statusText: String {
+    if mapper.suppressed { return "Browser gamepad" }
+    if !trusted { return "Needs permission" }
+    return mapper.enabled ? "Active · \(mapper.profile.name)" : "Paused"
+  }
+
+  private func item(_ title: String, _ action: Selector, key: String = "", symbol: String? = nil) -> NSMenuItem {
     let i = NSMenuItem(title: title, action: action, keyEquivalent: key)
     i.target = self
+    if let symbol { i.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil) }
     return i
   }
 
-  private func disabled(_ title: String) -> NSMenuItem {
+  private func disabled(_ title: String, symbol: String? = nil) -> NSMenuItem {
     let i = NSMenuItem(title: title, action: nil, keyEquivalent: "")
     i.isEnabled = false
+    if let symbol { i.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil) }
     return i
   }
 
@@ -227,32 +290,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }.joined(separator: ", ")
   }
 
-  private func refreshIcon() {
-    guard let button = statusItem?.button else { return }
+  /// Updates the menu-bar icon and the window's model.
+  private func refresh() {
     let connected = !controllers.isEmpty
-    let name = connected ? "gamecontroller.fill" : "gamecontroller"
-    let image = NSImage(systemSymbolName: name, accessibilityDescription: "RematchBridge")
-    image?.isTemplate = true
-    button.image = image
-    button.appearsDisabled = !connected || (!mapper.enabled && !mapper.suppressed) || (!trusted && !mapper.suppressed)
-    button.toolTip = !connected ? "RematchBridge: no controller"
-      : mapper.suppressed ? "RematchBridge: browser gamepad"
-      : !trusted ? "RematchBridge: needs Accessibility permission"
-      : mapper.enabled ? "RematchBridge: \(mapper.profile.name)" : "RematchBridge: paused"
+    if let button = statusItem?.button {
+      let image = NSImage(systemSymbolName: connected ? "gamecontroller.fill" : "gamecontroller",
+                          accessibilityDescription: "RematchBridge")
+      image?.isTemplate = true
+      button.image = image
+      button.appearsDisabled = !connected || (!mapper.suppressed && (!mapper.enabled || !trusted))
+      button.toolTip = connected ? "RematchBridge — \(statusText)" : "RematchBridge — no controller"
+    }
+    model.controllerName = controllers.values.first.map { AppModel.shortName($0.name) }
+    model.accessibilityGranted = trusted
+    model.mappingEnabled = mapper.enabled
+    model.browserActive = mapper.suppressed
+    model.profileNames = store.profiles.map(\.name)
+    model.activeProfile = mapper.profile.name
+    model.chosenProfile = store.profiles.contains { $0.name == chosenProfileName } ? chosenProfileName : store.profiles[0].name
+    model.launchAtLogin = SMAppService.mainApp.status == .enabled
   }
 
   // MARK: - Actions
+
+  @objc private func openWindow() { window.show() }
 
   @objc private func toggleMapping() { mapper.setEnabled(!mapper.enabled) }
 
   @objc private func chooseProfile(_ sender: NSMenuItem) {
     guard let name = sender.representedObject as? String else { return }
-    chosenProfileName = name
-    if let p = store.profiles.first(where: { $0.name == name }) {
-      mapper.setProfile(p)
-      Log.write("profile: \(p.name) (chosen)")
-    }
-    refreshIcon()
+    choose(profileNamed: name)
   }
 
   @objc private func assignProfile(_ sender: NSMenuItem) {
@@ -261,13 +328,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     else { return }
     do {
       try store.assign(bundleID: pair[1], to: p)
-      applyProfile()
+      applyProfile(announce: false)
+      refresh()
     } catch {
       alert("Couldn't save profile", error.localizedDescription)
     }
   }
 
-  @objc private func editProfiles() {
+  @objc private func editProfilesAction() { editProfiles() }
+
+  private func editProfiles() {
     let readme = store.folder.appendingPathComponent("README.txt")
     try? Self.readme.write(to: readme, atomically: true, encoding: .utf8)
     NSWorkspace.shared.open(store.folder)
@@ -276,7 +346,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   @objc private func reloadProfiles() {
     store.reload()
     mapper.setProfile(activeProfile)
-    if !store.errors.isEmpty { showProfileErrors() }
+    refresh()
+    if store.errors.isEmpty {
+      hud.show("Profiles Reloaded", symbol: "arrow.clockwise")
+    } else {
+      showProfileErrors()
+    }
   }
 
   @objc private func showProfileErrors() {
@@ -285,6 +360,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
   @objc private func toggleLogin() {
     setLaunchAtLogin(SMAppService.mainApp.status != .enabled)
+    refresh()
   }
 
   private func setLaunchAtLogin(_ on: Bool) {
@@ -295,7 +371,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
   }
 
-  @objc private func showExtension() {
+  @objc private func showExtensionAction() { showExtension() }
+
+  private func showExtension() {
     let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
       .appendingPathComponent("RematchBridge/Chrome Extension", isDirectory: true)
     // Copy out of the app bundle so the folder Chrome loads survives app updates.
@@ -311,15 +389,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     {
       NSWorkspace.shared.open([url], withApplicationAt: chrome, configuration: NSWorkspace.OpenConfiguration())
     }
-    alert("Browser gamepad for Xbox Cloud Gaming",
+    alert("Set up the browser gamepad",
       """
       1. In Chrome's Extensions page (just opened), turn on Developer mode (top right).
-      2. Click "Load unpacked". In the folder picker press Cmd+Shift+G, paste (Cmd+V), press Return, then click Select.
-         (The folder's location is already on your clipboard.)
-      3. Open xbox.com/play. Your controller appears as an Xbox controller, with rumble.
+      2. Click "Load unpacked". In the folder picker press Cmd+Shift+G, paste (Cmd+V), press Return, then click Select. The folder's location is already on your clipboard.
+      3. Open (or reload) xbox.com/play. Your controller appears as an Xbox controller, with rumble.
 
-      Keyboard/mouse mapping pauses automatically while that tab is in front.
-      Works on: xbox.com, play.geforcenow.com, hardwaretester.com/gamepad (for testing).
+      Keyboard & mouse mapping pauses automatically while that tab is in front.
       """)
   }
 
@@ -337,6 +413,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     if prompt, !trusted {
       NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
     }
+    refresh()
     guard !trusted, trustTimer == nil else { return }
     trustTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] t in
       guard let self, AXIsProcessTrusted() else { return }
@@ -344,9 +421,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       t.invalidate()
       self.trustTimer = nil
       Log.write("accessibility granted")
-      self.refreshIcon()
+      self.hud.show("Keyboard & Mouse Ready", symbol: "checkmark.circle.fill")
+      self.refresh()
     }
-    refreshIcon()
   }
 
   private func alert(_ title: String, _ text: String) {

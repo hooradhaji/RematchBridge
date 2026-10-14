@@ -22,6 +22,8 @@ final class WebBridge {
 
   /// Main queue: true while any connected page has focus.
   var onFocusChange: ((Bool) -> Void)?
+  /// Main queue: hosts of the pages currently connected (e.g. "xbox.com").
+  var onPagesChange: (([String]) -> Void)?
   /// Main queue: rumble request, magnitudes 0...1, duration in seconds.
   var onRumble: ((Double, Double, Double) -> Void)?
 
@@ -34,6 +36,7 @@ final class WebBridge {
   private final class Client {
     let connection: NWConnection
     var open = false  // handshake accepted
+    var origin = ""
     var focused = false
     var buffer = Data()
     init(_ c: NWConnection) { connection = c }
@@ -133,7 +136,9 @@ final class WebBridge {
       + "Sec-WebSocket-Accept: \(Data(digest).base64EncodedString())\r\n\r\n"
     client.connection.send(content: Data(response.utf8), completion: .idempotent)
     client.open = true
+    client.origin = origin
     Log.write("web bridge: \(origin) connected")
+    publishPages()
     if let frame = lastFrame { send(frame, to: client) }
     if !client.buffer.isEmpty { parseFrames(client, id) }
   }
@@ -224,7 +229,15 @@ final class WebBridge {
     if c.open {
       Log.write("web bridge: page disconnected")
       publishFocus()
+      publishPages()
     }
+  }
+
+  private func publishPages() {
+    let hosts = Set(clients.values.filter(\.open).map {
+      $0.origin.replacingOccurrences(of: "https://", with: "").replacingOccurrences(of: "www.", with: "")
+    }).sorted()
+    DispatchQueue.main.async { self.onPagesChange?(hosts) }
   }
 
   private func publishFocus() {

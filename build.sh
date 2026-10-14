@@ -2,7 +2,7 @@
 # Builds RematchBridge.app (menu-bar app) and the gipdump diagnostic tool into ./build.
 set -euo pipefail
 cd "$(dirname "$0")"
-VERSION=1.0
+VERSION=1.1
 APP=build/RematchBridge.app
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
@@ -10,6 +10,9 @@ swiftc -O -swift-version 5 -target arm64-apple-macos14.0 \
   Sources/Core/*.swift Sources/App/*.swift -o "$APP/Contents/MacOS/RematchBridge"
 swiftc -O -swift-version 5 Sources/Core/*.swift Sources/Tools/gipdump/main.swift -o build/gipdump
 cp -R Extension "$APP/Contents/Resources/Extension"
+swiftc -O Sources/Tools/make-icon/main.swift -o build/make-icon
+build/make-icon build/icon >/dev/null
+iconutil -c icns build/icon/AppIcon.iconset -o "$APP/Contents/Resources/AppIcon.icns"
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -18,6 +21,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleName</key><string>RematchBridge</string>
   <key>CFBundleDisplayName</key><string>RematchBridge</string>
   <key>CFBundleExecutable</key><string>RematchBridge</string>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>$VERSION</string>
   <key>CFBundleVersion</key><string>$VERSION</string>
