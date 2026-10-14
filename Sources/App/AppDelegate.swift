@@ -1,6 +1,7 @@
 import AppKit
 import ApplicationServices
 import ServiceManagement
+import SwiftUI
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   private let store = ProfileStore()
@@ -11,6 +12,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   private let model = AppModel()
   private let hud = HUD()
   private lazy var window = MainWindowController(model: model)
+  private let popover = NSPopover()
+  private let fallbackMenu = NSMenu()
   private var rumbleGeneration = 0
   private var controllers: [UInt32: GIPDevice] = [:]  // by USB location
   private var statusItem: NSStatusItem!
@@ -40,9 +43,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     applyProfile(announce: false)
 
     statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-    let menu = NSMenu()
-    menu.delegate = self
-    statusItem.menu = menu
+    fallbackMenu.delegate = self
+    statusItem.button?.target = self
+    statusItem.button?.action = #selector(statusItemClicked(_:))
+    statusItem.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
+
+    let host = NSHostingController(rootView: PopoverView(model: model))
+    host.sizingOptions = .preferredContentSize
+    popover.contentViewController = host
+    popover.behavior = .transient
+    popover.animates = true
 
     wireModel()
 
@@ -94,7 +104,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     model.openAccessibility = { [weak self] in self?.requestAccessibility(prompt: true) }
     model.setUpBrowser = { [weak self] in self?.showExtension() }
     model.setLaunchAtLogin = { [weak self] on in self?.setLaunchAtLogin(on); self?.refresh() }
-    model.editProfiles = { [weak self] in self?.editProfiles() }
+    model.editProfiles = { [weak self] in self?.closePopover(); self?.editProfiles() }
+    model.reloadProfiles = { [weak self] in self?.reloadProfiles() }
+    model.assignLastApp = { [weak self] name in self?.assignLastApp(to: name) }
+    model.openWindow = { [weak self] in self?.closePopover(); self?.window.show() }
+    model.openLog = { [weak self] in self?.closePopover(); self?.openLog() }
+    model.quit = { NSApp.terminate(nil) }
+    let setUp = model.setUpBrowser
+    model.setUpBrowser = { [weak self] in self?.closePopover(); setUp() }
+    let allow = model.openAccessibility
+    model.openAccessibility = { [weak self] in self?.closePopover(); allow() }
+  }
+
+  // MARK: - Status item
+
+  @objc private func statusItemClicked(_ sender: NSStatusBarButton) {
+    let event = NSApp.currentEvent
+    if event?.type == .rightMouseUp || event?.modifierFlags.contains(.control) == true {
+      // Right-click: the classic menu.
+      closePopover()
+      statusItem.menu = fallbackMenu
+      sender.performClick(nil)
+      statusItem.menu = nil
+      return
+    }
+    if popover.isShown {
+      closePopover()
+    } else {
+      refresh()
+      popover.show(relativeTo: sender.bounds, of: sender, preferredEdge: .minY)
+      popover.contentViewController?.view.window?.makeKey()
+    }
+  }
+
+  private func closePopover() {
+    if popover.isShown { popover.performClose(nil) }
+  }
+
+  private func assignLastApp(to profileName: String?) {
+    guard let id = lastApp?.bundleIdentifier else { return }
+    do {
+      if let name = profileName, let p = store.profiles.first(where: { $0.name == name }) {
+        try store.assign(bundleID: id, to: p)
+      } else {
+        try store.unassign(bundleID: id)
+      }
+      applyProfile(announce: false)
+      refresh()
+    } catch {
+      alert("Couldn't save profile", error.localizedDescription)
+    }
   }
 
   // MARK: - Controllers
@@ -161,6 +220,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
     if app != .current { lastApp = app }
     applyProfile(announce: true)
+    refresh()
   }
 
   private var activeProfile: Profile {
@@ -309,6 +369,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     model.activeProfile = mapper.profile.name
     model.chosenProfile = store.profiles.contains { $0.name == chosenProfileName } ? chosenProfileName : store.profiles[0].name
     model.launchAtLogin = SMAppService.mainApp.status == .enabled
+    var apps: [String: String] = [:]
+    for p in store.profiles where !p.apps.isEmpty { apps[p.name] = appNames(p.apps) }
+    model.profileApps = apps
+    model.lastAppName = lastApp?.localizedName
+    model.lastAppProfile = lastApp?.bundleIdentifier.flatMap { id in store.profiles.first { $0.apps.contains(id) }?.name }
+    model.profileErrorCount = store.errors.count
   }
 
   // MARK: - Actions

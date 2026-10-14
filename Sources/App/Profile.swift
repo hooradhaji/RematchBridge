@@ -264,6 +264,20 @@ final class ProfileStore {
     reload()
   }
 
+  /// Stops switching profiles automatically for `bundleID`.
+  func unassign(bundleID: String) throws {
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+    for p in profiles {
+      guard let url = p.url, p.apps.contains(bundleID) else { continue }
+      var file = p.file
+      let apps = (file.apps ?? []).filter { $0 != bundleID }
+      file.apps = apps.isEmpty ? nil : apps
+      try encoder.encode(file).write(to: url)
+    }
+    reload()
+  }
+
   private static func describe(_ error: DecodingError) -> String {
     switch error {
     case .keyNotFound(let key, _): "missing \"\(key.stringValue)\""

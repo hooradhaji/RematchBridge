@@ -54,5 +54,9 @@ check(Input.lt.isPressed(st, triggerThreshold: 0.25) && !Input.rt.isPressed(st, 
 check(GIP.shareFromEnd(vendorID: 0x0E6F, productID: 0x02A0) == nil, "no share guess")
 check(GIP.ack(for: hex("07 30 05 02 01 5b"), seq: 0) == hex("01 20 05 09 00 07 20 02 00 00 00 00 00"), "ack format")
 
+check(AppModel.shortName("Xbox Rematch Advanced Wired Controller- Dark Cosmos Reveal") == "Rematch Advanced Wired", "short name")
+check(AppModel.shortName("Xbox Controller") == "Xbox Controller", "short name keeps short names")
+check(AppModel.shortName("PowerA Wired Controller") == "PowerA Wired", "short name drops Controller")
+check(AppModel.shortName("Gamepad") == "Gamepad", "single word kept")
 print(failures == 0 ? "ALL TESTS PASSED" : "\(failures) FAILURE(S)")
 exit(failures == 0 ? 0 : 1)

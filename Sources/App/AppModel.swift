@@ -13,6 +13,12 @@ final class AppModel: ObservableObject {
   @Published var activeProfile = ""
   @Published var chosenProfile = ""
   @Published var launchAtLogin = false
+  /// Profile → app names that switch to it automatically.
+  @Published var profileApps: [String: String] = [:]
+  /// The last app in front (other than us), for "Always use for…".
+  @Published var lastAppName: String?
+  @Published var lastAppProfile: String?
+  @Published var profileErrorCount = 0
 
   // Actions the window can trigger; wired up by the app delegate.
   var setMappingEnabled: (Bool) -> Void = { _ in }
@@ -21,11 +27,19 @@ final class AppModel: ObservableObject {
   var setUpBrowser: () -> Void = {}
   var setLaunchAtLogin: (Bool) -> Void = { _ in }
   var editProfiles: () -> Void = {}
+  var reloadProfiles: () -> Void = {}
+  var assignLastApp: (String?) -> Void = { _ in }  // nil = stop using a fixed profile for it
+  var openWindow: () -> Void = {}
+  var openLog: () -> Void = {}
+  var quit: () -> Void = {}
 
-  /// "Xbox Rematch Advanced Wired Controller- Dark Cosmos Reveal" → "Rematch Advanced Wired Controller"
+  /// "Xbox Rematch Advanced Wired Controller- Dark Cosmos Reveal" → "Rematch Advanced Wired"
   static func shortName(_ usbName: String) -> String {
     var name = usbName.components(separatedBy: "-").first?.trimmingCharacters(in: .whitespaces) ?? usbName
-    if name.hasPrefix("Xbox "), name.count > 12 { name.removeFirst(5) }
+    // Drop the generic words only when at least two descriptive words remain.
+    func words(_ s: String) -> Int { s.split(separator: " ").count }
+    if name.hasPrefix("Xbox "), words(name) >= 3 { name.removeFirst(5) }
+    if name.hasSuffix(" Controller"), words(name) >= 3 { name.removeLast(11) }
     return name.isEmpty ? usbName : name
   }
 
