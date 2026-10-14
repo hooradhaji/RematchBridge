@@ -7,6 +7,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   private var mapper: Mapper!
   private let usbQueue = DispatchQueue(label: "rematchbridge.usb")
   private let monitor = GIPMonitor()
+  private let web = WebBridge()
+  private var rumbleGeneration = 0
   private var controllers: [UInt32: GIPDevice] = [:]  // by USB location
   private var statusItem: NSStatusItem!
   private var trusted = AXIsProcessTrusted()
@@ -43,6 +45,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       self, selector: #selector(frontAppChanged(_:)), name: NSWorkspace.didActivateApplicationNotification, object: nil)
     if let front = NSWorkspace.shared.frontmostApplication, front != .current { lastApp = front }
 
+    web.onFocusChange = { [weak self] focused in
+      guard let self else { return }
+      if focused != self.mapper.suppressed { Log.write(focused ? "browser gamepad active" : "browser gamepad idle") }
+      self.mapper.setSuppressed(focused)
+      self.refreshIcon()
+    }
+    web.onRumble = { [weak self] strong, weak, duration in self?.rumble(strong: strong, weak: weak, duration: duration) }
+    web.start()
+
     monitor.onConnect = { [weak self] service in self?.connect(service) }
     monitor.start(queue: usbQueue)
 
@@ -65,6 +76,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let device = GIPDevice(service: service, queue: usbQueue)
     let location = device.locationID
     device.onState = { [weak self] state in
+      self?.web.publish(state)
       DispatchQueue.main.async { self?.mapper.update(state) }
     }
     device.onDisconnect = { [weak self] in
@@ -72,7 +84,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard let self, self.controllers[location] === device else { return }
         self.controllers[location] = nil
         Log.write("disconnected: \(device.name)")
-        if self.controllers.isEmpty { self.mapper.stop() }
+        if self.controllers.isEmpty {
+          self.mapper.stop()
+          self.web.publish(nil)
+        }
         self.refreshIcon()
       }
     }
@@ -87,8 +102,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         self.controllers[location] = device
         Log.write("connected: \(device.name) \(String(format: "%04x:%04x", device.vendorID, device.productID))")
         self.mapper.start()
+        self.web.publish(PadState())
         self.refreshIcon()
       }
+    }
+  }
+
+  /// Browser rumble: magnitudes 0...1, stops after `duration` seconds.
+  private func rumble(strong: Double, weak: Double, duration: Double) {
+    rumbleGeneration += 1
+    let gen = rumbleGeneration
+    let s = UInt8((strong * 100).rounded()), w = UInt8((weak * 100).rounded())
+    for c in controllers.values { c.rumble(strong: s, weak: w) }
+    guard s > 0 || w > 0 else { return }
+    DispatchQueue.main.asyncAfter(deadline: .now() + max(duration, 0.05)) { [weak self] in
+      guard let self, self.rumbleGeneration == gen else { return }
+      for c in self.controllers.values { c.rumble(strong: 0, weak: 0) }
     }
   }
 
@@ -131,6 +160,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       menu.addItem(item("⚠︎ Allow Accessibility so buttons work…", #selector(openAccessibility)))
     }
 
+    if mapper.suppressed {
+      menu.addItem(disabled("● Browser gamepad in use (keys paused)"))
+    }
+
     menu.addItem(.separator())
     let toggle = item(mapper.enabled ? "Mapping On" : "Mapping Paused", #selector(toggleMapping), key: "")
     toggle.state = mapper.enabled ? .on : .off
@@ -164,6 +197,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
     menu.addItem(item("Edit Profiles…", #selector(editProfiles)))
     menu.addItem(item("Reload Profiles", #selector(reloadProfiles)))
+
+    menu.addItem(item("Set Up Browser Gamepad (Xbox Cloud)…", #selector(showExtension)))
 
     menu.addItem(.separator())
     let login = item("Launch at Login", #selector(toggleLogin))
@@ -199,8 +234,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let image = NSImage(systemSymbolName: name, accessibilityDescription: "RematchBridge")
     image?.isTemplate = true
     button.image = image
-    button.appearsDisabled = !connected || !mapper.enabled || !trusted
+    button.appearsDisabled = !connected || (!mapper.enabled && !mapper.suppressed) || (!trusted && !mapper.suppressed)
     button.toolTip = !connected ? "RematchBridge: no controller"
+      : mapper.suppressed ? "RematchBridge: browser gamepad"
       : !trusted ? "RematchBridge: needs Accessibility permission"
       : mapper.enabled ? "RematchBridge: \(mapper.profile.name)" : "RematchBridge: paused"
   }
@@ -257,6 +293,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     } catch {
       Log.write("launch at login: \(error.localizedDescription)")
     }
+  }
+
+  @objc private func showExtension() {
+    let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+      .appendingPathComponent("RematchBridge/Chrome Extension", isDirectory: true)
+    // Copy out of the app bundle so the folder Chrome loads survives app updates.
+    if let bundled = Bundle.main.url(forResource: "Extension", withExtension: nil) {
+      try? FileManager.default.removeItem(at: support)
+      try? FileManager.default.copyItem(at: bundled, to: support)
+    }
+    NSWorkspace.shared.activateFileViewerSelecting([support])
+    alert("Browser gamepad for Xbox Cloud Gaming",
+      """
+      1. In Chrome, open chrome://extensions and turn on Developer mode (top right).
+      2. Click "Load unpacked" and choose the "Chrome Extension" folder that just opened in Finder.
+      3. Open xbox.com/play. Your controller appears as an Xbox controller, with rumble.
+
+      Keyboard/mouse mapping pauses automatically while that tab is in front.
+      Works on: xbox.com, play.geforcenow.com, hardwaretester.com/gamepad (for testing).
+      """)
   }
 
   @objc private func openLog() {

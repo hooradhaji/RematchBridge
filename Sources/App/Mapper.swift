@@ -6,6 +6,8 @@ final class Mapper {
   var onEnabledChange: ((Bool) -> Void)?
 
   private(set) var enabled = true
+  /// True while a browser tab is using the controller as a gamepad; key/mouse output pauses.
+  private(set) var suppressed = false
   private(set) var profile: Profile
 
   private var state = PadState()
@@ -48,6 +50,13 @@ final class Mapper {
     onEnabledChange?(on)
   }
 
+  func setSuppressed(_ on: Bool) {
+    guard on != suppressed else { return }
+    if on { releaseAll() }
+    suppressed = on
+    if !on, enabled { syncHeldToCurrentState() }
+  }
+
   /// Starts the 125 Hz loop that drives stick mouse/scroll movement.
   func start() {
     guard tick == nil else { return }
@@ -71,6 +80,10 @@ final class Mapper {
 
   func update(_ new: PadState) {
     let threshold = profile.triggerThreshold
+    if suppressed {  // the browser gets every button, including Xbox
+      state = new
+      return
+    }
     // The toggle button works even while mapping is off.
     for input in Input.allCases where profile.actions[input] == .toggleMapping {
       if input.isPressed(new, triggerThreshold: threshold), !input.isPressed(state, triggerThreshold: threshold) {
@@ -260,7 +273,7 @@ final class Mapper {
     let now = DispatchTime.now()
     let dt = min(Double(now.uptimeNanoseconds - lastTick.uptimeNanoseconds) / 1e9, 0.05)
     lastTick = now
-    guard enabled else { return }
+    guard enabled, !suppressed else { return }
     for (cfg, x, y) in [(profile.file.leftStick, state.lx, state.ly), (profile.file.rightStick, state.rx, state.ry)] {
       guard let v = shaped(x: x, y: y, config: cfg) else { continue }
       switch cfg.mode {
