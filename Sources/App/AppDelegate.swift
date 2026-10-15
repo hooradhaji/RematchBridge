@@ -82,7 +82,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       UserDefaults.standard.set(true, forKey: "didOfferLogin")
       setLaunchAtLogin(true)
     }
-    if !trusted { requestAccessibility(prompt: false) }
+    requestAccessibility(prompt: false)  // logs the current state and keeps watching it
     refresh()
     checkExtension()
     extensionTimer = Timer.scheduledTimer(withTimeInterval: 20, repeats: true) { [weak self] _ in self?.checkExtension() }
@@ -522,23 +522,60 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
   @objc private func quit() { NSApp.terminate(nil) }
 
+  /// What macOS currently allows: Accessibility, and posting keyboard/mouse events.
+  private static func permissions() -> (accessibility: Bool, postEvents: Bool) {
+    (AXIsProcessTrusted(), CGPreflightPostEventAccess())
+  }
+
   private func requestAccessibility(prompt: Bool) {
-    let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: prompt] as CFDictionary
-    trusted = AXIsProcessTrustedWithOptions(options)
-    if prompt, !trusted {
-      NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
+    if prompt {
+      if !Self.permissions().accessibility {
+        // A stale entry (from an older build's signature) shows as "on" in System Settings
+        // but never matches, and macOS won't prompt again while it exists. Clear only our
+        // own entry so the current build can register cleanly.
+        resetOwnAccessibilityEntry()
+      }
+      let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+      _ = AXIsProcessTrustedWithOptions(options)
+      _ = CGRequestPostEventAccess()  // registers the event-posting permission too
+      if !Self.permissions().accessibility {
+        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
+      }
+    }
+    checkPermissions()
+    guard trustTimer == nil else { return }
+    // Keep watching: permissions can be granted or revoked at any time in System Settings.
+    trustTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in self?.checkPermissions() }
+  }
+
+  private func resetOwnAccessibilityEntry() {
+    guard let id = Bundle.main.bundleIdentifier else { return }
+    let task = Process()
+    task.executableURL = URL(fileURLWithPath: "/usr/bin/tccutil")
+    task.arguments = ["reset", "Accessibility", id]
+    do {
+      try task.run()
+      task.waitUntilExit()
+      Log.write("reset stale Accessibility entry for \(id) (exit \(task.terminationStatus))")
+    } catch {
+      Log.write("could not reset Accessibility entry: \(error.localizedDescription)")
+    }
+  }
+
+  private var lastPermissions: (accessibility: Bool, postEvents: Bool)?
+
+  private func checkPermissions() {
+    let now = Self.permissions()
+    let changed = lastPermissions.map { $0 != now } ?? true
+    let wasTrusted = trusted
+    lastPermissions = now
+    trusted = now.accessibility || now.postEvents
+    guard changed else { return }
+    Log.write("permissions: accessibility=\(now.accessibility) postEvents=\(now.postEvents)")
+    if trusted, !wasTrusted {
+      hud.show("Keyboard & Mouse Ready", symbol: "checkmark.circle.fill")
     }
     refresh()
-    guard !trusted, trustTimer == nil else { return }
-    trustTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] t in
-      guard let self, AXIsProcessTrusted() else { return }
-      self.trusted = true
-      t.invalidate()
-      self.trustTimer = nil
-      Log.write("accessibility granted")
-      self.hud.show("Keyboard & Mouse Ready", symbol: "checkmark.circle.fill")
-      self.refresh()
-    }
   }
 
   private func alert(_ title: String, _ text: String) {

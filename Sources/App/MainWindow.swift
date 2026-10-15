@@ -56,7 +56,7 @@ struct MainView: View {
           symbol: "keyboard", title: "Keyboard & mouse",
           detail: model.accessibilityGranted
             ? "Allowed in Accessibility"
-            : "Turn on RematchBridge in Accessibility. Already on? Select it, click −, then allow again.",
+            : "Click Allow, then turn on RematchBridge in the list that opens.",
           ok: model.accessibilityGranted,
           action: model.accessibilityGranted ? nil : ("Allow…", model.openAccessibility))
         Divider().padding(.leading, 36)

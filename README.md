@@ -17,7 +17,7 @@ It started as a fix for the Turtle Beach Rematch Advanced Wired Controller, henc
 2. Open it. RematchBridge isn't notarized by Apple (it's a free hobby project), so macOS blocks it the first time:
    - Open **System Settings → Privacy & Security**, scroll down, and click **Open Anyway** next to the RematchBridge message. Confirm with your password.
 3. Plug in your controller with a USB data cable (not a charge-only cable). The RematchBridge window shows **Controller ✓**, and on Xbox One/Series-style pads the Xbox button lights up.
-4. Click **Allow…** next to *Keyboard & mouse*, and turn on **RematchBridge** in **Accessibility**. Without that, macOS silently drops its key and mouse events. If RematchBridge is already listed but the app still asks, select it, click **−**, and allow it again.
+4. Click **Allow…** next to *Keyboard & mouse*, and turn on **RematchBridge** in **Accessibility**. Without that, macOS silently drops its key and mouse events. After an update, macOS forgets the permission (the switch may still look on). Just click **Allow** again: it clears the old entry and asks fresh.
 
 Click the controller icon in the menu bar for the control panel. Right-click it for the classic menu.
 
@@ -87,8 +87,6 @@ To create a virtual game controller, macOS requires the `com.apple.developer.hid
 
 Requirements: macOS 14 or later (Apple Silicon or Intel) and the Xcode Command Line Tools (`xcode-select --install`). Full Xcode isn't needed.
 
-Optional: run `scripts/make-signing-cert.sh` once. It creates a personal code-signing certificate in your keychain, and `build.sh` then signs with it, so macOS keeps the Accessibility permission across rebuilds.
-
 ```bash
 ./build.sh
 ```
@@ -101,7 +99,7 @@ Optional: run `scripts/make-signing-cert.sh` once. It creates a personal code-si
 ditto build/RematchBridge.app /Applications/RematchBridge.app
 ```
 
-Without the signing certificate, builds are ad-hoc signed and macOS forgets the Accessibility permission after every rebuild. In that case, remove RematchBridge from Accessibility with **−** and allow it again.
+Builds are ad-hoc signed, so macOS forgets the Accessibility permission after every rebuild. Click **Allow** in the app again and turn it on. (A self-signed certificate would keep the identity stable, but macOS 26 refuses Accessibility to apps signed with an untrusted certificate.)
 
 **Diagnostics:**
 - `build/gipdump 60` prints live button and stick state for 60 seconds. Quit RematchBridge first, since only one program can read the controller at a time.

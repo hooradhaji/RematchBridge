@@ -71,7 +71,7 @@ struct PopoverView: View {
       Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
       VStack(alignment: .leading, spacing: 1) {
         Text("Allow keyboard & mouse").font(.system(size: 12, weight: .semibold))
-        Text("Already on? Remove it with − and allow again").font(.system(size: 11)).foregroundStyle(.secondary)
+        Text("Click Allow, then turn RematchBridge on").font(.system(size: 11)).foregroundStyle(.secondary)
       }
       Spacer()
       Button("Allow", action: model.openAccessibility).buttonStyle(PillButtonStyle(prominent: true))
