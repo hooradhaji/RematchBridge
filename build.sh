@@ -2,7 +2,7 @@
 # Builds RematchBridge.app (menu-bar app) and the gipdump diagnostic tool into ./build.
 set -euo pipefail
 cd "$(dirname "$0")"
-VERSION=1.2
+VERSION=1.2.1
 APP=build/RematchBridge.app
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
