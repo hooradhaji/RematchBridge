@@ -49,23 +49,28 @@ struct MainView: View {
     VStack(spacing: 0) {
         SetupRow(
           symbol: "cable.connector", title: "Controller",
-          detail: model.controllerName.map { "Connected over USB — \($0)" } ?? "Plug in your Rematch with a USB cable",
+          detail: model.controllerName.map { "Connected over USB — \($0)" } ?? "Plug in your controller with a USB cable",
           ok: model.controllerName != nil)
         Divider().padding(.leading, 36)
         SetupRow(
           symbol: "keyboard", title: "Keyboard & mouse",
           detail: model.accessibilityGranted
-            ? "Allowed in Accessibility" : "Needs Accessibility permission to press keys and move the mouse",
+            ? "Allowed in Accessibility"
+            : "Turn on RematchBridge in Accessibility. Already on? Select it, click −, then allow again.",
           ok: model.accessibilityGranted,
           action: model.accessibilityGranted ? nil : ("Allow…", model.openAccessibility))
         Divider().padding(.leading, 36)
         SetupRow(
           symbol: "globe", title: "Browser gamepad",
-          detail: model.browserPages.isEmpty
-            ? "For Xbox Cloud Gaming & GeForce NOW in Chrome"
-            : "Connected to \(model.browserPages.joined(separator: ", "))",
-          ok: !model.browserPages.isEmpty, optional: true,
-          action: ("Set Up…", model.setUpBrowser))
+          detail: model.browserSummary.text,
+          ok: model.browserSummary.ok, optional: true,
+          action: {
+            switch model.extensionStatus {
+            case .installed: return model.browserPages.isEmpty ? ("Play", model.openCloudGaming) : nil
+            case .disabled: return ("Turn On…", model.openBrowserExtensions)
+            case .notInstalled: return ("Set Up…", model.setUpBrowser)
+            }
+          }())
     }
     .padding(.horizontal, 14)
     .padding(.vertical, 4)
@@ -122,7 +127,7 @@ private struct SetupRow: View {
         Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(2)
       }
       Spacer(minLength: 8)
-      if let action, !ok { Button(action.0, action: action.1).controlSize(.small) }
+      if let action { Button(action.0, action: action.1).controlSize(.small) }
       Image(systemName: ok ? "checkmark.circle.fill" : optional ? "circle.dashed" : "exclamationmark.circle.fill")
         .foregroundStyle(ok ? .green : optional ? .secondary : .orange)
         .font(.title3)

@@ -39,7 +39,7 @@ struct PopoverView: View {
   }
 
   private var statusText: String {
-    if !connected { return "Plug in your Rematch with USB" }
+    if !connected { return "Plug in your controller with USB" }
     if model.browserActive { return "Playing in the browser" }
     if !model.accessibilityGranted { return "Needs permission" }
     return model.mappingEnabled ? "Active · \(model.activeProfile)" : "Paused"
@@ -71,7 +71,7 @@ struct PopoverView: View {
       Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
       VStack(alignment: .leading, spacing: 1) {
         Text("Allow keyboard & mouse").font(.system(size: 12, weight: .semibold))
-        Text("Turn on RematchBridge in Accessibility").font(.system(size: 11)).foregroundStyle(.secondary)
+        Text("Already on? Remove it with − and allow again").font(.system(size: 11)).foregroundStyle(.secondary)
       }
       Spacer()
       Button("Allow", action: model.openAccessibility).buttonStyle(PillButtonStyle(prominent: true))
@@ -90,13 +90,15 @@ struct PopoverView: View {
         PillSwitch(isOn: model.mappingEnabled) { model.setMappingEnabled(!model.mappingEnabled) }
       }
       Divider().padding(.leading, 38)
-      Row(symbol: "globe", title: "Browser Gamepad",
-          subtitle: model.browserPages.isEmpty ? "For Xbox Cloud Gaming in Chrome"
-            : "Connected · " + model.browserPages.joined(separator: ", ")) {
-        if model.browserPages.isEmpty {
-          Button("Set Up", action: model.setUpBrowser).buttonStyle(PillButtonStyle())
-        } else {
+      Row(symbol: "globe", title: "Browser Gamepad", subtitle: model.browserSummary.text) {
+        if !model.browserPages.isEmpty {
           Image(systemName: "checkmark.circle.fill").foregroundStyle(.green).font(.system(size: 16))
+        } else {
+          switch model.extensionStatus {
+          case .installed: Button("Play", action: model.openCloudGaming).buttonStyle(PillButtonStyle(prominent: true))
+          case .disabled: Button("Turn On", action: model.openBrowserExtensions).buttonStyle(PillButtonStyle())
+          case .notInstalled: Button("Set Up", action: model.setUpBrowser).buttonStyle(PillButtonStyle())
+          }
         }
       }
     }

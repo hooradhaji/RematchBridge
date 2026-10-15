@@ -14,8 +14,68 @@ func registryString(_ service: io_service_t, _ key: String) -> String? {
     .takeRetainedValue() as? String
 }
 
-/// One wired GIP controller, read directly over USB (no driver involved).
-final class GIPDevice {
+/// Which USB protocol a controller speaks.
+enum PadProtocol {
+  /// Xbox One / Series and licensed third-party pads (interface FF/47/D0).
+  case gip
+  /// Xbox 360-style wired pads (interface FF/5D/01).
+  case xusb
+}
+
+/// Decides which controllers RematchBridge should drive: wired Xbox-protocol pads that
+/// no macOS driver handles. Nothing else on USB is ever opened.
+enum PadMatcher {
+  /// Returns the protocol for `service` if it's a controller we should drive.
+  static func match(_ service: io_service_t) -> PadProtocol? {
+    let vid = registryNumber(service, "idVendor") ?? 0
+    let pid = registryNumber(service, "idProduct") ?? 0
+    if appleHandled.contains(pair(vid, pid)) { return nil }
+    // The signature lists the device's and each interface's class/subclass/protocol,
+    // so this works before the device is configured, without opening it.
+    let sig = signature(service)
+    if registryNumber(service, "bDeviceClass") == 0xFF, registryNumber(service, "bDeviceSubClass") == 0x47,
+      registryNumber(service, "bDeviceProtocol") == 0xD0
+    {
+      return .gip
+    }
+    if contains(sig, [0xFF, 0x47, 0xD0]) { return .gip }
+    if contains(sig, [0xFF, 0x5D, 0x01]) { return .xusb }  // not 0x81: that's the wireless receiver
+    return nil
+  }
+
+  private static func pair(_ v: Int, _ p: Int) -> Int { v << 16 | p }
+
+  private static func signature(_ service: io_service_t) -> [UInt8] {
+    guard let data = IORegistryEntryCreateCFProperty(service, "UsbDeviceSignature" as CFString, kCFAllocatorDefault, 0)?
+      .takeRetainedValue() as? Data
+    else { return [] }
+    return [UInt8](data)
+  }
+
+  static func contains(_ haystack: [UInt8], _ needle: [UInt8]) -> Bool {
+    guard haystack.count >= needle.count else { return false }
+    return (0...(haystack.count - needle.count)).contains { Array(haystack[$0..<($0 + needle.count)]) == needle }
+  }
+
+  /// Controllers Apple's own driver (XboxGamepad.dext) claims. Read from the system so new
+  /// macOS versions are respected automatically; the fallback is macOS 26's list.
+  static let appleHandled: Set<Int> = {
+    var set: Set<Int> = [pair(0x045E, 0x028E), pair(0x045E, 0x0B00), pair(0x045E, 0x02EA), pair(0x045E, 0x0B12)]
+    let url = URL(fileURLWithPath: "/System/Library/DriverExtensions/XboxGamepad.dext/Info.plist")
+    if let plist = NSDictionary(contentsOf: url), let personalities = plist["IOKitPersonalities"] as? [String: Any] {
+      for case let p as [String: Any] in personalities.values {
+        guard let v = (p["idVendor"] as? NSNumber)?.intValue else { continue }
+        if let pid = (p["idProduct"] as? NSNumber)?.intValue { set.insert(pair(v, pid)) }
+        for case let pid as NSNumber in (p["idProductArray"] as? [Any]) ?? [] { set.insert(pair(v, pid.intValue)) }
+      }
+    }
+    return set
+  }()
+}
+
+/// One wired Xbox-protocol controller, read directly over USB (no driver involved).
+final class PadDevice {
+  let kind: PadProtocol
   let name: String
   let serial: String
   let vendorID: Int
@@ -43,6 +103,7 @@ final class GIPDevice {
   private lazy var shareFromEnd = GIP.shareFromEnd(vendorID: vendorID, productID: productID)
 
   struct ResetInProgress: Error {}
+  private var deviceDescription: String { String(format: "%04x:%04x", vendorID, productID) }
 
   private static let resetLock = NSLock()
   private static var lastReset: [UInt32: Date] = [:]
@@ -55,16 +116,8 @@ final class GIPDevice {
     return true
   }
 
-  /// Returns true for wired Xbox One / Series (GIP) pads that no driver has claimed.
-  /// Microsoft's own pads are left to Apple's built-in driver.
-  static func isCandidate(_ service: io_service_t) -> Bool {
-    registryNumber(service, "bDeviceClass") == 0xFF
-      && registryNumber(service, "bDeviceSubClass") == 0x47
-      && registryNumber(service, "bDeviceProtocol") == 0xD0
-      && registryNumber(service, "idVendor") != 0x045E
-  }
-
-  init(service: io_service_t, queue: DispatchQueue) {
+  init(service: io_service_t, kind: PadProtocol, queue: DispatchQueue) {
+    self.kind = kind
     IOObjectRetain(service)
     deviceService = service
     self.queue = queue
@@ -72,7 +125,8 @@ final class GIPDevice {
     productID = registryNumber(service, "idProduct") ?? 0
     locationID = UInt32(truncatingIfNeeded: registryNumber(service, "locationID") ?? 0)
     name = registryString(service, "USB Product Name") ?? registryString(service, "kUSBProductString")
-      ?? String(format: "GIP controller %04x:%04x", vendorID, productID)
+      ?? String(format: kind == .gip ? "Xbox-style controller %04x:%04x" : "Xbox 360-style controller %04x:%04x",
+                vendorID, productID)
     serial = registryString(service, "USB Serial Number") ?? registryString(service, "kUSBSerialNumberString")
       ?? String(format: "%08x", locationID)
   }
@@ -102,7 +156,13 @@ final class GIPDevice {
   func rumble(strong: UInt8, weak: UInt8) {
     queue.async {
       guard !self.closed else { return }
-      self.send(GIP.rumble(seq: self.nextSeq(), leftTrigger: 0, rightTrigger: 0, strong: strong, weak: weak))
+      switch self.kind {
+      case .gip:
+        self.send(GIP.rumble(seq: self.nextSeq(), leftTrigger: 0, rightTrigger: 0, strong: strong, weak: weak))
+      case .xusb:
+        func scale(_ v: UInt8) -> UInt8 { UInt8(min(255, Int(v) * 255 / 100)) }
+        self.send(XUSB.rumble(strong: scale(strong), weak: scale(weak)))
+      }
     }
   }
 
@@ -118,10 +178,10 @@ final class GIPDevice {
     // it never re-announces and ignores input requests. A USB reset makes it start over.
     // The reset re-enumerates the device, so the monitor reports it again and that
     // second instance (within the window) proceeds normally.
-    if Self.claimReset(locationID: locationID) {
+    if kind == .gip, Self.claimReset(locationID: locationID) {
       Log.write("resetting \(name) to restart its handshake")
       try dev.reset()
-      throw GIPDevice.ResetInProgress()
+      throw PadDevice.ResetInProgress()
     }
     try dev.__configure(withValue: 1, matchInterfaces: true)
 
@@ -153,9 +213,15 @@ final class GIPDevice {
   }
 
   private func wake() {
-    send(GIP.powerOn(seq: nextSeq()))
-    send(GIP.led(seq: nextSeq()))
-    send(GIP.pdpEnableInput(seq: nextSeq()))
+    switch kind {
+    case .gip:
+      send(GIP.powerOn(seq: nextSeq()))
+      send(GIP.led(seq: nextSeq()))
+      send(GIP.pdpEnableInput(seq: nextSeq()))
+    case .xusb:
+      sawInput = true  // 360 pads stream as soon as they're configured
+      send(XUSB.ledPlayer1)
+    }
   }
 
   private func waitForInterface() -> io_service_t? {
@@ -164,15 +230,22 @@ final class GIPDevice {
       if IORegistryEntryGetChildIterator(deviceService, kIOServicePlane, &iterator) == KERN_SUCCESS {
         defer { IOObjectRelease(iterator) }
         while case let child = IOIteratorNext(iterator), child != 0 {
-          if IOObjectConformsTo(child, "IOUSBHostInterface") != 0, registryNumber(child, "bInterfaceNumber") == 0 {
-            return child
-          }
+          if IOObjectConformsTo(child, "IOUSBHostInterface") != 0, isControllerInterface(child) { return child }
           IOObjectRelease(child)
         }
       }
       usleep(50_000)
     }
     return nil
+  }
+
+  private func isControllerInterface(_ service: io_service_t) -> Bool {
+    let cls = registryNumber(service, "bInterfaceClass"), sub = registryNumber(service, "bInterfaceSubClass")
+    let proto = registryNumber(service, "bInterfaceProtocol")
+    switch kind {
+    case .gip: return registryNumber(service, "bInterfaceNumber") == 0 && cls == 0xFF && (sub == 0x47 || sub == nil)
+    case .xusb: return cls == 0xFF && sub == 0x5D && proto == 0x01
+    }
   }
 
   private func nextSeq() -> UInt8 {
@@ -230,6 +303,12 @@ final class GIPDevice {
 
   private func handle(_ p: [UInt8]) {
     onPacket?(p)
+    if kind == .xusb {
+      let before = state
+      XUSB.decodeInput(p, into: &state)
+      if state != before { onState?(state) }
+      return
+    }
     guard p.count >= 4 else { return }
     if p[1] & GIP.flagNeedsAck != 0 { send(GIP.ack(for: p, seq: 0)) }
     let before = state
@@ -262,9 +341,9 @@ final class GIPDevice {
   }
 }
 
-/// Watches for GIP controllers being plugged in.
-final class GIPMonitor {
-  var onConnect: ((io_service_t) -> Void)?
+/// Watches for supported controllers being plugged in.
+final class PadMonitor {
+  var onConnect: ((io_service_t, PadProtocol) -> Void)?
   private var port: IONotificationPortRef?
   private var iterator: io_iterator_t = 0
 
@@ -273,14 +352,14 @@ final class GIPMonitor {
     IONotificationPortSetDispatchQueue(port, queue)
     let context = Unmanaged.passUnretained(self).toOpaque()
     IOServiceAddMatchingNotification(port, kIOFirstMatchNotification, IOServiceMatching("IOUSBHostDevice"), { context, iterator in
-      Unmanaged<GIPMonitor>.fromOpaque(context!).takeUnretainedValue().drain(iterator)
+      Unmanaged<PadMonitor>.fromOpaque(context!).takeUnretainedValue().drain(iterator)
     }, context, &iterator)
     drain(iterator)
   }
 
   private func drain(_ iterator: io_iterator_t) {
     while case let service = IOIteratorNext(iterator), service != 0 {
-      if GIPDevice.isCandidate(service) { onConnect?(service) }
+      if let kind = PadMatcher.match(service) { onConnect?(service, kind) }
       IOObjectRelease(service)
     }
   }

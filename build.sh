@@ -2,7 +2,7 @@
 # Builds RematchBridge.app (menu-bar app) and the gipdump diagnostic tool into ./build.
 set -euo pipefail
 cd "$(dirname "$0")"
-VERSION=1.1
+VERSION=1.2
 APP=build/RematchBridge.app
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
@@ -35,6 +35,15 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>NSHumanReadableCopyright</key><string>© 2026 hooradhaji · MIT License · Not affiliated with Turtle Beach or Microsoft.</string>
 </dict></plist>
 PLIST
-codesign --force --sign - --identifier local.rematchbridge "$APP"
+# Sign with the personal certificate if it exists (see scripts/make-signing-cert.sh), so
+# macOS keeps the Accessibility permission across builds; otherwise ad-hoc.
+IDENTITY="${SIGN_IDENTITY:-RematchBridge Code Signing}"
+if security find-certificate -c "$IDENTITY" >/dev/null 2>&1 \
+  && codesign --force --sign "$IDENTITY" --identifier local.rematchbridge "$APP" 2>/dev/null; then
+  echo "signed with \"$IDENTITY\""
+else
+  codesign --force --sign - --identifier local.rematchbridge "$APP"
+  echo "ad-hoc signed (run scripts/make-signing-cert.sh to keep permissions across builds)"
+fi
 codesign --verify --strict "$APP"
 echo "built $APP"

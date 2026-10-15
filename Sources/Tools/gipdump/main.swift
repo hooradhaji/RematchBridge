@@ -3,8 +3,8 @@ import Foundation
 // Live view of the controller: prints decoded buttons/sticks and any raw byte changes.
 setbuf(stdout, nil)
 let queue = DispatchQueue(label: "gipdump")
-let monitor = GIPMonitor()
-var devices: [GIPDevice] = []
+let monitor = PadMonitor()
+var devices: [PadDevice] = []
 var lastRaw: [UInt8] = []
 
 func describe(_ s: PadState) -> String {
@@ -19,13 +19,14 @@ func describe(_ s: PadState) -> String {
     + (on.isEmpty ? "-" : on.joined(separator: " "))
 }
 
-monitor.onConnect = { service in
-  let d = GIPDevice(service: service, queue: queue)
-  print("connected: \(d.name) \(String(format: "%04x:%04x", d.vendorID, d.productID))")
+monitor.onConnect = { service, kind in
+  let d = PadDevice(service: service, kind: kind, queue: queue)
+  print("connected: \(d.name) \(String(format: "%04x:%04x", d.vendorID, d.productID)) [\(kind)]")
   d.onState = { print(describe($0)) }
   let raw = ProcessInfo.processInfo.environment["RAW"] != nil
   d.onPacket = { p in
     if raw { print("raw", p.map { String(format: "%02x", $0) }.joined(separator: " ")) }
+    guard d.kind == .gip else { return }
     guard p[0] == GIP.cmdInput else {
       if p[0] != GIP.cmdStatus { print("packet", p.map { String(format: "%02x", $0) }.joined(separator: " ")) }
       return
@@ -40,7 +41,7 @@ monitor.onConnect = { service in
   d.onDisconnect = { print("disconnected") }
   print("(if the Xbox button light comes on, the handshake worked)")
   d.start { error in
-    if let error, !(error is GIPDevice.ResetInProgress) { print("open failed: \(error.localizedDescription)") }
+    if let error, !(error is PadDevice.ResetInProgress) { print("open failed: \(error.localizedDescription)") }
   }
   devices.append(d)
 }

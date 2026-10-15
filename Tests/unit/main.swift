@@ -58,5 +58,28 @@ check(AppModel.shortName("Xbox Rematch Advanced Wired Controller- Dark Cosmos Re
 check(AppModel.shortName("Xbox Controller") == "Xbox Controller", "short name keeps short names")
 check(AppModel.shortName("PowerA Wired Controller") == "PowerA Wired", "short name drops Controller")
 check(AppModel.shortName("Gamepad") == "Gamepad", "single word kept")
+// Xbox 360 (XUSB) decoding, layout per Linux xpad
+var x360 = [UInt8](repeating: 0, count: 20); x360[1] = 0x14
+x360[2] = 0x01 | 0x10 | 0x40   // up, start(menu), left stick click
+x360[3] = 0x01 | 0x04 | 0x10 | 0x80  // LB, guide, A, Y
+x360[4] = 255; x360[5] = 128
+x360[6] = 0x00; x360[7] = 0x80  // LX = -32768
+x360[8] = 0xFF; x360[9] = 0x7F  // LY = 32767 (up)
+st = PadState()
+check(XUSB.decodeInput(x360, into: &st), "360 report accepted")
+check(st.up && st.menu && st.ls && !st.view && !st.down, "360 byte 2 \(st)")
+check(st.lb && st.guide && st.a && st.y && !st.b && !st.x && !st.rb, "360 byte 3 \(st)")
+check(st.lt == 1023 && st.rt == 514 && st.lx == -32768 && st.ly == 32767, "360 axes \(st)")
+var notInput = [UInt8](repeating: 0, count: 3); notInput[0] = 0x01; notInput[1] = 0x03
+st = PadState(); check(!XUSB.decodeInput(notInput, into: &st) && st == PadState(), "360 LED status ignored")
+check(XUSB.rumble(strong: 200, weak: 10) == [0, 8, 0, 200, 10, 0, 0, 0], "360 rumble")
+
+// Matching helpers and Apple's claimed list
+check(PadMatcher.contains([0x5E, 0x04, 0xFF, 0x5D, 0x01, 0xFF], [0xFF, 0x5D, 0x01]), "signature contains")
+check(!PadMatcher.contains([0xFF, 0x5D, 0x81], [0xFF, 0x5D, 0x01]), "wireless receiver not matched")
+check(PadMatcher.appleHandled.contains(0x045E << 16 | 0x0B12), "Apple list includes Series X|S")
+check(!PadMatcher.appleHandled.contains(0x10F5 << 16 | 0x711F), "Rematch not in Apple list")
+check(!PadMatcher.appleHandled.contains(0x045E << 16 | 0x02DD), "original Xbox One pad not in Apple list")
+
 print(failures == 0 ? "ALL TESTS PASSED" : "\(failures) FAILURE(S)")
 exit(failures == 0 ? 0 : 1)

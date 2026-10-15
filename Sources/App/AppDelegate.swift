@@ -7,7 +7,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   private let store = ProfileStore()
   private var mapper: Mapper!
   private let usbQueue = DispatchQueue(label: "rematchbridge.usb")
-  private let monitor = GIPMonitor()
+  private let monitor = PadMonitor()
   private let web = WebBridge()
   private let model = AppModel()
   private let hud = HUD()
@@ -15,7 +15,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   private let popover = NSPopover()
   private let fallbackMenu = NSMenu()
   private var rumbleGeneration = 0
-  private var controllers: [UInt32: GIPDevice] = [:]  // by USB location
+  private var extensionTimer: Timer?
+  private var extensionCheckRunning = false
+  private var controllers: [UInt32: PadDevice] = [:]  // by USB location
   private var statusItem: NSStatusItem!
   private var trusted = AXIsProcessTrusted()
   private var trustTimer: Timer?
@@ -68,11 +70,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
     web.onPagesChange = { [weak self] pages in
       self?.model.browserPages = pages
+      self?.checkExtension()
     }
     web.onRumble = { [weak self] strong, weak, duration in self?.rumble(strong: strong, weak: weak, duration: duration) }
     web.start()
 
-    monitor.onConnect = { [weak self] service in self?.connect(service) }
+    monitor.onConnect = { [weak self] service, kind in self?.connect(service, kind: kind) }
     monitor.start(queue: usbQueue)
 
     if UserDefaults.standard.object(forKey: "didOfferLogin") == nil {
@@ -81,6 +84,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
     if !trusted { requestAccessibility(prompt: false) }
     refresh()
+    checkExtension()
+    extensionTimer = Timer.scheduledTimer(withTimeInterval: 20, repeats: true) { [weak self] _ in self?.checkExtension() }
     // First run, or something still needs attention: show the setup window.
     if !UserDefaults.standard.bool(forKey: "didOnboard") || !trusted {
       UserDefaults.standard.set(true, forKey: "didOnboard")
@@ -107,7 +112,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     model.editProfiles = { [weak self] in self?.closePopover(); self?.editProfiles() }
     model.reloadProfiles = { [weak self] in self?.reloadProfiles() }
     model.assignLastApp = { [weak self] name in self?.assignLastApp(to: name) }
-    model.openWindow = { [weak self] in self?.closePopover(); self?.window.show() }
+    model.openWindow = { [weak self] in self?.closePopover(); self?.window.show(); self?.checkExtension() }
+    model.openCloudGaming = { [weak self] in self?.closePopover(); self?.openInBrowser("https://www.xbox.com/play") }
+    model.openBrowserExtensions = { [weak self] in
+      self?.closePopover()
+      self?.openInBrowser(self?.extensionsPageURL ?? "chrome://extensions")
+    }
     model.openLog = { [weak self] in self?.closePopover(); self?.openLog() }
     model.quit = { NSApp.terminate(nil) }
     let setUp = model.setUpBrowser
@@ -132,8 +142,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       closePopover()
     } else {
       refresh()
+      checkExtension()
       popover.show(relativeTo: sender.bounds, of: sender, preferredEdge: .minY)
       popover.contentViewController?.view.window?.makeKey()
+    }
+  }
+
+  /// Re-reads whether the browser extension is installed (off the main thread).
+  private func checkExtension() {
+    guard !extensionCheckRunning else { return }
+    extensionCheckRunning = true
+    DispatchQueue.global(qos: .utility).async {
+      let status = ExtensionDetector.detect()
+      DispatchQueue.main.async {
+        self.extensionCheckRunning = false
+        if self.model.extensionStatus != status { self.model.extensionStatus = status }
+      }
+    }
+  }
+
+  private var detectedBrowserID: String {
+    switch model.extensionStatus {
+    case .installed(_, let id), .disabled(_, let id): return id
+    case .notInstalled: return "com.google.Chrome"
+    }
+  }
+
+  private var extensionsPageURL: String {
+    switch detectedBrowserID {
+    case "com.microsoft.edgemac": return "edge://extensions"
+    case "com.brave.Browser": return "brave://extensions"
+    default: return "chrome://extensions"
+    }
+  }
+
+  /// Opens `url` in the browser that has the extension (Chrome if none).
+  private func openInBrowser(_ url: String) {
+    guard let target = URL(string: url) else { return }
+    if let app = NSWorkspace.shared.urlForApplication(withBundleIdentifier: detectedBrowserID) {
+      NSWorkspace.shared.open([target], withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration())
+    } else {
+      NSWorkspace.shared.open(target)
     }
   }
 
@@ -159,8 +208,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   // MARK: - Controllers
 
   /// Called on the USB queue.
-  private func connect(_ service: io_service_t) {
-    let device = GIPDevice(service: service, queue: usbQueue)
+  private func connect(_ service: io_service_t, kind: PadProtocol) {
+    let device = PadDevice(service: service, kind: kind, queue: usbQueue)
     let location = device.locationID
     device.onState = { [weak self] state in
       self?.web.publish(state)
@@ -187,7 +236,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       DispatchQueue.main.async {
         guard let self else { return }
         if let error {
-          if !(error is GIPDevice.ResetInProgress) { Log.write("could not open \(device.name): \(error.localizedDescription)") }
+          if !(error is PadDevice.ResetInProgress) { Log.write("could not open \(device.name): \(error.localizedDescription)") }
           return
         }
         self.controllers[location]?.close()
@@ -261,7 +310,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let name = controllers.values.first.map { AppModel.shortName($0.name) }
     let header = disabled(name ?? "No Controller", symbol: name == nil ? "gamecontroller" : "gamecontroller.fill")
     if #available(macOS 14.4, *) {
-      header.subtitle = name == nil ? "Plug in your Rematch with a USB cable" : statusText
+      header.subtitle = name == nil ? "Plug in your controller with a USB cable" : statusText
     }
     menu.addItem(header)
     if !trusted {

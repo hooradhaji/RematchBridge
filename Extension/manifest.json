@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "RematchBridge Gamepad",
-  "version": "1.1",
-  "description": "Gives Xbox Cloud Gaming and GeForce NOW your controller through the RematchBridge Mac app.",
+  "version": "1.2",
+  "description": "Gives Xbox Cloud Gaming and GeForce NOW the controller connected through the RematchBridge Mac app.",
   "content_scripts": [
     {
       "matches": [

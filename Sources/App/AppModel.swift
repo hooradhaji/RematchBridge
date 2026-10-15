@@ -19,6 +19,17 @@ final class AppModel: ObservableObject {
   @Published var lastAppName: String?
   @Published var lastAppProfile: String?
   @Published var profileErrorCount = 0
+  @Published var extensionStatus: ExtensionStatus = .notInstalled
+
+  /// One line about the browser gamepad, for the panel and the window.
+  var browserSummary: (text: String, ok: Bool) {
+    if !browserPages.isEmpty { return ("Connected · " + browserPages.joined(separator: ", "), true) }
+    switch extensionStatus {
+    case .installed(let browser, _): return ("Installed in \(browser) · open Xbox Cloud to play", true)
+    case .disabled(let browser, _): return ("Turned off in \(browser)'s extensions", false)
+    case .notInstalled: return ("For Xbox Cloud Gaming & GeForce NOW", false)
+    }
+  }
 
   // Actions the window can trigger; wired up by the app delegate.
   var setMappingEnabled: (Bool) -> Void = { _ in }
@@ -30,6 +41,8 @@ final class AppModel: ObservableObject {
   var reloadProfiles: () -> Void = {}
   var assignLastApp: (String?) -> Void = { _ in }  // nil = stop using a fixed profile for it
   var openWindow: () -> Void = {}
+  var openCloudGaming: () -> Void = {}
+  var openBrowserExtensions: () -> Void = {}
   var openLog: () -> Void = {}
   var quit: () -> Void = {}
 
