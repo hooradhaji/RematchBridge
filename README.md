@@ -1,58 +1,50 @@
 # RematchBridge
 
-A macOS menu-bar app that makes the **Turtle Beach Xbox Rematch Advanced Wired Controller** (and other wired Xbox One/Series-style "GIP" pads) usable on Apple Silicon Macs by turning it into **keyboard and mouse input**.
+Use a **Turtle Beach Rematch Advanced Wired Controller** (and other wired Xbox-style controllers that macOS ignores) on your Mac:
 
-macOS 26 has a built-in driver for wired Xbox controllers, but it only accepts Microsoft's own controllers. Third-party pads like the Rematch (USB `10f5:711f`) show up on USB and nothing uses them. RematchBridge talks to the controller directly over USB (IOUSBHost, no driver or kernel extension) and sends keyboard and mouse events.
+- **Xbox Cloud Gaming & GeForce NOW in Chrome:** your controller shows up as a real Xbox gamepad, with analog sticks and triggers, the Xbox button and rumble.
+- **Everything else** (emulators, Moonlight, Parsec, the desktop): the controller acts as a keyboard and mouse, with switchable profiles.
 
-## Xbox Cloud Gaming / GeForce NOW (browser gamepad)
+macOS has a built-in driver for wired Xbox controllers, but it only accepts Microsoft's own pads. Third-party pads like the Rematch (USB ID `10f5:711f`) show up on USB and nothing uses them. RematchBridge talks to the controller directly over USB. It needs no driver, no kernel extension and no administrator password.
 
-Browsers read controllers through the web Gamepad API, so a Chrome extension can supply one without Apple's entitlement. RematchBridge streams the controller's state over a loopback-only WebSocket (`127.0.0.1:37121`). It accepts only pages from xbox.com, play.geforcenow.com and hardwaretester.com; any other origin gets `403` and no data. The extension in `Extension/` presents the controller to those pages as a standard Xbox gamepad with analog sticks and triggers, the Xbox and Share buttons, and rumble. Keyboard/mouse mapping pauses automatically while one of those tabs is in front.
+> Not affiliated with, endorsed by, or sponsored by Turtle Beach or Microsoft. "Rematch", "Turtle Beach", "Xbox" and "Xbox Cloud Gaming" are trademarks of their owners and are used here only to describe compatibility.
 
-Setup (Chrome):
-1. Open `chrome://extensions` and turn on **Developer mode**.
-2. Click **Load unpacked** and choose this repo's `Extension` folder. The menu item **Set Up Browser Gamepad…** also copies a version to your Library folder and puts the path on the clipboard (press Cmd+Shift+G in the picker).
-3. Reload any xbox.com or GeForce NOW tab that was already open. Test at https://hardwaretester.com/gamepad.
+## Install
 
-## Why keyboard/mouse and not a virtual controller?
+1. Download **RematchBridge.zip** from the [latest release](../../releases/latest), unzip it, and drag **RematchBridge.app** into **Applications**.
+2. Open it. RematchBridge isn't notarized by Apple (it's a free hobby project), so macOS blocks it the first time:
+   - Open **System Settings → Privacy & Security**, scroll down, and click **Open Anyway** next to the RematchBridge message. Confirm with your password.
+3. Plug in your controller with a USB cable. The Xbox button lights up and the RematchBridge window shows **Controller ✓**.
+4. Click **Allow…** next to *Keyboard & mouse*, and turn on **RematchBridge** in **Accessibility**. Without that, macOS silently drops its key and mouse events.
 
-To create a virtual game controller, macOS needs the `com.apple.developer.hid.virtual.device` entitlement, which only Apple can grant. Even running as root doesn't get around it (tested on macOS 26.5). So native Mac games won't see a controller. Anything that accepts keyboard and mouse works, including emulators, Moonlight and Parsec. Browser games, such as Xbox Cloud Gaming, get a real gamepad through the extension above.
+Click the controller icon in the menu bar for the control panel. Right-click it for the classic menu.
+
+### Browser gamepad (Xbox Cloud Gaming, GeForce NOW)
+
+1. Download **RematchBridge-Chrome-Extension.zip** from the [latest release](../../releases/latest) and unzip it somewhere permanent, for example your Documents folder.
+2. In Chrome, open `chrome://extensions` and turn on **Developer mode** (top right).
+3. Click **Load unpacked** and choose the unzipped folder.
+4. Open (or **reload**) [xbox.com/play](https://www.xbox.com/play). Test at [hardwaretester.com/gamepad](https://hardwaretester.com/gamepad).
+
+Keyboard and mouse mapping pauses automatically while one of those tabs is in front, so inputs never double up.
 
 ## Features
 
-- **RematchBridge window:** setup checklist (controller, keyboard & mouse permission, browser gamepad), a live controller view that doubles as a tester, profile picker, mapping switch and Open at Login. It opens on first launch, from the menu, or when you open the app again.
-- **On-screen HUD:** a brief banner when the controller connects or disconnects, mapping pauses or resumes, or the profile changes.
-
-- Detects the controller on plug-in and unplug. A USB reset on connect wakes the pad fully (the Xbox button lights up).
-- Profiles: **Desktop** (mouse, scroll, clicks, arrows), **Emulator** (RetroArch default keys), **Streaming (FPS)** (WASD, mouse look).
-- Per-app profiles: "Always Use for…" in the menu, or `"apps": [bundle IDs]` in the profile file.
-- The Xbox button pauses or resumes mapping.
-- Smooth analog mouse with deadzone and response curve, pixel scrolling, double-click, held keys, key repeat, and combos like `cmd+tab`.
-- Launch at login.
-
-## Requirements
-
-- macOS 14 or later on Apple Silicon (tested on macOS 26.5.1)
-- Xcode Command Line Tools (`xcode-select --install`). Full Xcode isn't needed.
-
-## Build and install
-
-```bash
-./build.sh
-```
-
-```bash
-ditto build/RematchBridge.app /Applications/RematchBridge.app
-```
-
-```bash
-open /Applications/RematchBridge.app
-```
-
-On first launch, allow RematchBridge in **System Settings → Privacy & Security → Accessibility**. Without that, macOS drops its keyboard and mouse events. The build is ad-hoc signed, so after every rebuild you have to switch that permission off and on again.
+- **Menu-bar panel:** status, a mini live controller, keyboard & mouse switch, browser gamepad status, profile buttons and quick actions.
+- **RematchBridge window:** a setup checklist, a live controller view that doubles as a tester, the profile picker and Open at Login.
+- **On-screen banner** when the controller connects or disconnects, mapping pauses or resumes, or the profile changes.
+- **Profiles:**
+  - **Desktop:** left stick = mouse, right stick = scroll, A/B = clicks, D-pad = arrow keys.
+  - **Emulator:** RetroArch's default keyboard layout.
+  - **Streaming (FPS):** WASD on the left stick, mouse look on the right stick, triggers = mouse buttons.
+- **Per-app profiles:** "Always use a profile for …" switches automatically when that app is in front.
+- **The Xbox button** pauses or resumes keyboard & mouse mapping.
+- Smooth analog mouse with deadzone and response curve, pixel scrolling, double-click, held keys, key repeat and shortcuts like `cmd+tab`.
+- Plug-and-play. A USB reset on connect fully wakes the controller.
 
 ## Profiles
 
-The profiles are JSON files in `~/Library/Application Support/RematchBridge/Profiles/`. Use **Edit Profiles…** in the menu to open the folder; there's a README in it covering every option. Choose **Reload Profiles** after you edit a file. Delete all the files to get the built-in profiles back.
+Profiles are JSON files in `~/Library/Application Support/RematchBridge/Profiles/`. **Edit Profiles** opens the folder, which has a README covering every option. Choose **Reload Profiles** after editing. Delete all the files to get the built-in profiles back.
 
 ```json
 {
@@ -64,21 +56,48 @@ The profiles are JSON files in `~/Library/Application Support/RematchBridge/Prof
 }
 ```
 
-The back paddles send whatever you assign in Turtle Beach Control Hub (A and B by default).
-
-## Diagnostics
-
-- `build/gipdump 60` prints live button and stick state for 60 seconds. Quit RematchBridge first, since only one program can read the controller at a time.
-- `build/make-icon <dir>` regenerates the app and extension icons (run by `build.sh`).
-- `./test.sh` runs the unit tests (key parsing, profiles, and decoding of packets captured from the Rematch).
-- The log is at `~/Library/Logs/RematchBridge.log` (menu: Open Log).
+The Rematch's back paddles send whatever you assign in Turtle Beach Control Hub (A and B by default).
 
 ## Supported controllers
 
-- **Verified:** Turtle Beach Xbox Rematch Advanced Wired Controller (`10f5:711f`).
-- **Other wired GIP pads** (USB class `FF/47/D0`, not Microsoft) are picked up too, but they're untested and the Share button is only decoded on verified models.
-- **Microsoft controllers** are left to Apple's built-in driver.
+- **Verified:** Turtle Beach Rematch Advanced Wired Controller (`10f5:711f`).
+- **Probably works:** other wired Xbox One / Series-style controllers that macOS doesn't support itself. RematchBridge picks up any non-Microsoft controller that uses the same Xbox USB protocol, but these are untested, and the Share button is only read on verified models.
+- **Microsoft controllers** are left to macOS's built-in support.
+
+Tried another controller? [Open an issue](../../issues) with its name and USB ID (System Information → USB), plus the output of `build/gipdump 30` while you press each button.
+
+## Why keyboard & mouse instead of a virtual controller?
+
+To create a virtual game controller, macOS requires the `com.apple.developer.hid.virtual.device` entitlement, which only Apple grants. Running as root doesn't get around it. So native Mac games won't see a controller, but anything that accepts keyboard and mouse works. Browsers are different: they read controllers through the web Gamepad API, and the Chrome extension can supply one there.
+
+**How the browser bridge works:** RematchBridge streams the controller's state over a loopback-only WebSocket (`127.0.0.1:37121`). It accepts connections only from xbox.com, play.geforcenow.com and hardwaretester.com; any other origin gets `403` and no data. Nothing leaves your Mac.
+
+## Build from source
+
+Requirements: macOS 14 or later (Apple Silicon or Intel) and the Xcode Command Line Tools (`xcode-select --install`). Full Xcode isn't needed.
+
+```bash
+./build.sh
+```
+
+```bash
+./test.sh
+```
+
+```bash
+ditto build/RematchBridge.app /Applications/RematchBridge.app
+```
+
+Local builds are ad-hoc signed, so macOS forgets the Accessibility permission after every rebuild. Switch it off and on again after installing a new build.
+
+**Diagnostics:**
+- `build/gipdump 60` prints live button and stick state for 60 seconds. Quit RematchBridge first, since only one program can read the controller at a time.
+- The log is at `~/Library/Logs/RematchBridge.log` (Open Log in the panel).
 
 ## Credits
 
-The GIP protocol details come from the Linux [xpad](https://github.com/torvalds/linux/blob/master/drivers/input/joystick/xpad.c) driver and [OpenJoystickDriver](https://github.com/xsyetopz/OpenJoystickDriver) (MIT). No code was copied from either.
+The details of the Xbox controller USB protocol (GIP) come from the Linux [xpad](https://github.com/torvalds/linux/blob/master/drivers/input/joystick/xpad.c) driver and [OpenJoystickDriver](https://github.com/xsyetopz/OpenJoystickDriver). No code was copied from either.
+
+## License
+
+[MIT](LICENSE)

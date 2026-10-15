@@ -6,8 +6,12 @@ VERSION=1.1
 APP=build/RematchBridge.app
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-swiftc -O -swift-version 5 -target arm64-apple-macos14.0 \
-  Sources/Core/*.swift Sources/App/*.swift -o "$APP/Contents/MacOS/RematchBridge"
+# Universal binary: Apple Silicon + Intel.
+for ARCH in arm64 x86_64; do
+  swiftc -O -swift-version 5 -target $ARCH-apple-macos14.0 \
+    Sources/Core/*.swift Sources/App/*.swift -o "build/RematchBridge-$ARCH"
+done
+lipo -create build/RematchBridge-arm64 build/RematchBridge-x86_64 -output "$APP/Contents/MacOS/RematchBridge"
 swiftc -O -swift-version 5 Sources/Core/*.swift Sources/Tools/gipdump/main.swift -o build/gipdump
 cp -R Extension "$APP/Contents/Resources/Extension"
 swiftc -O Sources/Tools/make-icon/main.swift -o build/make-icon
@@ -28,7 +32,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>LSUIElement</key><true/>
   <key>LSApplicationCategoryType</key><string>public.app-category.utilities</string>
-  <key>NSHumanReadableCopyright</key><string>Personal build. GIP details informed by Linux xpad and OpenJoystickDriver (MIT).</string>
+  <key>NSHumanReadableCopyright</key><string>© 2026 hooradhaji · MIT License · Not affiliated with Turtle Beach or Microsoft.</string>
 </dict></plist>
 PLIST
 codesign --force --sign - --identifier local.rematchbridge "$APP"
